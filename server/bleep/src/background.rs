@@ -271,11 +271,18 @@ impl BoundSyncQueue {
     /// Block until the repository sync & index process is complete.
     ///
     /// Returns the new status.
-    pub(crate) async fn block_until_synced(self, reporef: RepoRef) -> anyhow::Result<SyncStatus> {
+    pub(crate) async fn block_until_synced(
+        self,
+        reporef: RepoRef,
+        changed: Option<Vec<PathBuf>>,
+    ) -> anyhow::Result<SyncStatus> {
         let Self(app) = &self;
         let jobs = &app.sync_queue;
 
-        let handle = SyncConfig::new(app, reporef).into_handle().await;
+        let handle = SyncConfig::new(app, reporef)
+            .changed(changed)
+            .into_handle()
+            .await;
         let finished = handle.notify_done();
 
         jobs.queue.push(handle).await;

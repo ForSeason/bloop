@@ -102,6 +102,7 @@ impl Indexable for File {
             ref file_cache,
             ref pipes,
             ref app,
+            ref changed,
             ..
         }: &SyncHandle,
         repo: &Repository,
@@ -195,7 +196,11 @@ impl Indexable for File {
                 })
                 .unwrap_or_else(|| "HEAD".to_owned());
 
-            let walker = FileWalker::index_directory(&repo.disk_path, branch);
+            let walker = if let Some(paths) = changed.clone() {
+                FileWalker::from_paths(&repo.disk_path, paths)
+            } else {
+                FileWalker::index_directory(&repo.disk_path, branch)
+            };
             let count = walker.len();
             walker.for_each(pipes, file_worker(count));
         };

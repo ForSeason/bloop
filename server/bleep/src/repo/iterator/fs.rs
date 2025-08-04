@@ -35,6 +35,30 @@ impl FileWalker {
 
         Self { file_list, branch }
     }
+
+    pub fn from_paths(root: &Path, paths: Vec<PathBuf>) -> Self {
+        use std::collections::HashSet;
+
+        let mut unique = HashSet::new();
+        let mut file_list = vec![];
+        for path in paths {
+            let full = if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            };
+            if let Ok(canon) = crate::canonicalize(full) {
+                if unique.insert(canon.clone()) {
+                    file_list.push(canon);
+                }
+            }
+        }
+
+        Self {
+            file_list,
+            branch: "HEAD".into(),
+        }
+    }
 }
 
 impl FileSource for FileWalker {
@@ -76,5 +100,21 @@ impl FileSource for FileWalker {
                 .take_any_while(|_| !pipes.is_cancelled())
                 .for_each(iterator);
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn from_paths_collects_files() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "a").unwrap();
+
+        let walker = FileWalker::from_paths(dir.path(), vec![file.clone()]);
+        assert_eq!(walker.len(), 1);
     }
 }

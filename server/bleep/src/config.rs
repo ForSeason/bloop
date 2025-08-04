@@ -44,6 +44,11 @@ pub struct Configuration {
     /// Disable system-native notification backends to detect new git commits immediately.
     pub disable_fsevents: bool,
 
+    #[clap(long, default_value_t = default_enable_fs_watch())]
+    #[serde(default = "default_enable_fs_watch")]
+    /// Enable filesystem watching for local repositories.
+    pub enable_fs_watch: bool,
+
     #[clap(long, default_value_t = false)]
     #[serde(default)]
     /// Avoid writing logs to files.
@@ -185,6 +190,8 @@ impl Configuration {
 
             disable_fsevents: b.disable_fsevents | a.disable_fsevents,
 
+            enable_fs_watch: b.enable_fs_watch & a.enable_fs_watch,
+
             disable_log_write: b.disable_log_write | a.disable_log_write,
 
             buffer_size: right_if_default!(b.buffer_size, a.buffer_size, default_buffer_size()),
@@ -307,6 +314,10 @@ fn default_qdrant_url() -> String {
 
 fn default_max_chunk_tokens() -> usize {
     256
+}
+
+const fn default_enable_fs_watch() -> bool {
+    true
 }
 
 fn interactive_batch_size() -> NonZeroUsize {

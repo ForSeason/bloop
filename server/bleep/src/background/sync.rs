@@ -24,6 +24,7 @@ pub struct SyncHandle {
     pub(crate) file_cache: FileCache,
     pub(crate) app: Application,
     pub(crate) shallow_config: gix::remote::fetch::Shallow,
+    pub(crate) changed: Option<Vec<PathBuf>>,
     shallow: bool,
     exited: flume::Sender<SyncStatus>,
     exit_signal: flume::Receiver<SyncStatus>,
@@ -103,6 +104,7 @@ pub struct SyncConfig {
     reporef: RepoRef,
     filter_updates: Option<FilterUpdate>,
     shallow: bool,
+    changed: Option<Vec<PathBuf>>,
 }
 
 impl SyncConfig {
@@ -112,11 +114,17 @@ impl SyncConfig {
             reporef,
             filter_updates: None,
             shallow: false,
+            changed: None,
         }
     }
 
     pub fn shallow(mut self, shallow: bool) -> Self {
         self.shallow = shallow;
+        self
+    }
+
+    pub fn changed(mut self, changed: Option<Vec<PathBuf>>) -> Self {
+        self.changed = changed;
         self
     }
 
@@ -132,6 +140,7 @@ impl SyncHandle {
             reporef,
             filter_updates,
             shallow,
+            changed,
             ..
         } = config;
         let status = app.sync_queue.broadcast();
@@ -211,6 +220,7 @@ impl SyncHandle {
             shallow,
             pipes,
             filter_updates,
+            changed,
             exited,
             exit_signal,
         };

@@ -1,5 +1,7 @@
 use std::{
+    collections::HashSet,
     ops::Not,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -130,6 +132,7 @@ pub(crate) async fn check_repo_updates(app: Application) {
 async fn periodic_repo_poll(app: Application, reporef: RepoRef) -> Option<()> {
     debug!(?reporef, "monitoring repo for changes");
     let mut poller = Poller::start(&app, &reporef)?;
+    let mut changed: Option<Vec<PathBuf>> = None;
 
     loop {
         use SyncStatus::*;
@@ -155,7 +158,11 @@ async fn periodic_repo_poll(app: Application, reporef: RepoRef) -> Option<()> {
         }
 
         debug!("starting sync");
-        if let Err(err) = app.write_index().block_until_synced(reporef.clone()).await {
+        if let Err(err) = app
+            .write_index()
+            .block_until_synced(reporef.clone(), changed.take())
+            .await
+        {
             error!(?err, ?reporef, "failed to sync & index repo");
             return None;
         }
@@ -187,17 +194,24 @@ async fn periodic_repo_poll(app: Application, reporef: RepoRef) -> Option<()> {
             )
         }
 
-        match tokio::time::timeout(poller.jittery_interval(), poller.git_change()).await {
-            Ok(_) => debug!(?reporef, "git changes triggered reindexing"),
-            Err(_) => debug!(?reporef, "timeout; reindexing"),
-        }
+        changed = match tokio::time::timeout(poller.jittery_interval(), poller.git_change()).await {
+            Ok(paths) => {
+                debug!(?reporef, "git changes triggered reindexing");
+                Some(paths.into_iter().collect())
+            }
+            Err(_) => {
+                debug!(?reporef, "timeout; reindexing");
+                None
+            }
+        };
     }
 }
 
 struct Poller {
     poll_interval_index: usize,
     minimum_interval_index: usize,
-    git_events: flume::Receiver<()>,
+    changed: HashSet<PathBuf>,
+    git_events: flume::Receiver<Vec<PathBuf>>,
     debouncer: Option<Debouncer<RecommendedWatcher>>,
 }
 
@@ -209,7 +223,10 @@ impl Poller {
         let (tx, rx) = flume::bounded(10);
 
         let mut _debouncer = None;
-        if !app.config.disable_fsevents && reporef.backend() == Backend::Local {
+        if app.config.enable_fs_watch
+            && !app.config.disable_fsevents
+            && reporef.backend() == Backend::Local
+        {
             let disk_path = app.repo_pool.read(reporef, |_, v| v.disk_path.clone())?;
 
             let mut debouncer = debounced_events(tx);
@@ -232,6 +249,7 @@ impl Poller {
         Some(Self {
             poll_interval_index,
             minimum_interval_index,
+            changed: HashSet::new(),
             debouncer: _debouncer,
             git_events: rx,
         })
@@ -263,14 +281,19 @@ impl Poller {
         poll_interval + Duration::from_secs(jitter)
     }
 
-    async fn git_change(&mut self) {
+    async fn git_change(&mut self) -> HashSet<PathBuf> {
         if self.debouncer.is_some() {
-            _ = self.git_events.recv_async().await;
-            _ = self.git_events.drain().collect::<Vec<_>>();
-        } else {
-            loop {
-                futures::pending!()
+            if let Ok(paths) = self.git_events.recv_async().await {
+                self.changed.extend(paths);
             }
+            while let Ok(paths) = self.git_events.try_recv() {
+                self.changed.extend(paths);
+            }
+            return std::mem::take(&mut self.changed);
+        }
+
+        loop {
+            futures::pending!()
         }
     }
 }
@@ -285,13 +308,14 @@ fn check_repo(app: &Application, reporef: &RepoRef) -> Option<(u64, i64, SyncSta
     })
 }
 
-fn debounced_events(tx: flume::Sender<()>) -> Debouncer<RecommendedWatcher> {
+fn debounced_events(tx: flume::Sender<Vec<PathBuf>>) -> Debouncer<RecommendedWatcher> {
     new_debouncer_opt(
         Duration::from_secs(5),
         None,
         move |event: DebounceEventResult| match event {
             Ok(events) if events.is_empty().not() => {
-                if let Err(e) = tx.send(()) {
+                let paths = events.into_iter().map(|e| e.path).collect();
+                if let Err(e) = tx.send(paths) {
                     error!("{e}");
                 }
             }
